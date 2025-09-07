@@ -11,7 +11,7 @@ if [ $# -eq 0 ]; then
         exit 1
 fi
 
-# ceck if there is only 1 file
+# check if there is only 1 file
 if [ $# -gt 1 ]; then
         echo "[-] Error. Only allowed one file for compiling."
         exit 1
@@ -38,7 +38,6 @@ if [ ! -d "output" ]; then
 fi
 
 # check if the necessary binaries are installed
-
 tools=("nasm" "xxd" "objcopy")
 
 missing=()
@@ -64,10 +63,6 @@ echo "[*] Generating the shellcode..."
 file="output/${1%%.*}.bin"
 object="output/${1%%.*}.obj"
 headers="output/${1%%.*}.h"
-
-# echo $file
-# echo $object
-# echo $headers
 
 # creating the shellcode
 nasm -f win64 $1 -o $object
