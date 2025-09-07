@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# this line is for exiting if something goes wrong with a command
+set -e 
+
+echo "[*] Tool to generate Windows shellcode."
+
+# helping menu
+if [ $# -eq 0 ]; then
+        echo "[i] Usage: $0 <FILE>.asm"
+        exit 1
+fi
+
+# ceck if there is only 1 file
+if [ $# -gt 1 ]; then
+        echo "[-] Error. Only allowed one file for compiling."
+        exit 1
+fi
+
+# check if the file has the .asm extension
+ext="${1##*.}"
+
+if [[ "$ext" != "asm" ]]; then
+    echo "[-] Only allowed .asm extensions."
+    exit 1
+fi
+
+# check if the file exist
+if [ ! -f $1 ]; then
+        echo "[!] File not found, exiting..."
+        exit 1
+fi
+
+# check if the folder "output" exist
+if [ ! -d "output" ]; then
+        echo "[+] Creating the output folder..."
+        mkdir output
+fi
+
+# check if the necessary binaries are installed
+
+tools=("nasm" "xxd" "objcopy")
+
+missing=()
+
+for cmd in "${tools[@]}"; do
+    if ! command -v "$cmd" &> /dev/null; then
+        missing+=("$cmd")
+    fi
+done
+
+if [ ${#missing[@]} -ne 0 ]; then
+    echo "[-] Missing commands for the compilation:"
+    for m in "${missing[@]}"; do
+        echo "   - $m"
+    done
+    exit 1
+fi
+
+# this only works for Windows x64, not x32 or linux
+echo "[*] Generating the shellcode..."
+
+# variables
+file="output/${1%%.*}.bin"
+object="output/${1%%.*}.obj"
+headers="output/${1%%.*}.h"
+
+# echo $file
+# echo $object
+# echo $headers
+
+# creating the shellcode
+nasm -f win64 $1 -o $object
+objcopy -O binary --only-section=.text $object $file
+xxd -i $file > $headers
+
+# print for c/c++ files
+cat $headers
