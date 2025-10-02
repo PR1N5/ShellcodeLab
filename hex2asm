@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# hex2asm.sh
+# Convert text \xHH... (or pure hex) to binary and disassembles it
+# 
+# Usage:
+#   ./hex2asm.sh -f hex.txt               # read file with \x.. or hex
+#   ./hex2asm.sh -s "\\xfc\\x48\\x81..."  # one line hex (note: scape \ in shell)
+#
+#
+# Options:
+#   -f <file>    file with hex (with \x... or pure hex)
+#   -s <string>  hex in one line
+#   -o <outbin>  output binary (default: payload.bin)
+#   -a <arch>    architecture: x86, x86_64, arm, aarch64, mips  (default: x86_64)
+#   -b <bits>    32 o 64 (default: 64)
+#   -t <tool>    prefer tool: auto, rasm2, ndisasm, objdump  (default: auto)
+#   -h           help menu
+
+
+
+set -euo pipefail # stop the code if fails
+
+# variables for later
+OUTBIN="payload.bin"
+ARCH="x86_64"
+BITS="64"
+TOOL="auto"
+HEXFILE=""
+HEXSTRING=""
+
+# help menu
+usage() {
+  sed -n '1,200p' "$0" | sed -n '1,120p'
+  echo
+  echo "Examples:"
+  echo "  $0 -f hex.txt"
+  echo "  $0 -s \"\\\\xfc\\\\x48\\\\x81\" -a x86_64 -b 64"
+  exit 1
+}
+
+
+# flags "route"
+while getopts "f:s:o:a:b:t:h" opt; do
+  case $opt in
+    f) HEXFILE="$OPTARG" ;;
+    s) HEXSTRING="$OPTARG" ;;
+    o) OUTBIN="$OPTARG" ;;
+    a) ARCH="$OPTARG" ;;
+    b) BITS="$OPTARG" ;;
+    t) TOOL="$OPTARG" ;;
+    h) usage ;;
+    *) usage ;;
+  esac
+done
+
+
+
+# control hexfile
+if [[ -z "$HEXFILE" && -z "$HEXSTRING" ]]; then
+  echo "[-] ERROR: specify -f <hexfile> o -s <hexstring>"
+  usage
+fi
+
+
+# delete prefix of the hex
+normalize_hex_from_file() {
+  sed -E 's/\\x//g; s/0x//g; s/[^0-9a-fA-F]//g' "$1"
+}
+normalize_hex_from_string() {
+  echo "$1" | sed -E 's/\\x//g; s/0x//g; s/[^0-9a-fA-F]//g'
+}
+
+
+
+# check if the file exist
+if [[ -n "$HEXFILE" ]]; then
+  if [[ ! -f "$HEXFILE" ]]; then
+    echo "[-] ERROR: file does not exist: $HEXFILE"
+    exit 2
+  fi
+  HEX_CLEAN=$(normalize_hex_from_file "$HEXFILE")
+else
+  HEX_CLEAN=$(normalize_hex_from_string "$HEXSTRING")
+fi
+
+# check hex data prefix clean
+if [[ -z "$HEX_CLEAN" ]]; then
+  echo "[-] ERROR: Could not clean the prefix of the hex data"
+  exit 3
+fi
+
+
+
+# create the binary
+echo "$HEX_CLEAN" | xxd -r -p > "$OUTBIN"
+echo "[+] creating: $OUTBIN  (size=$(stat -c%s "$OUTBIN") bytes)"
+
+
+# helper: check the binarys for the file to work
+have() { command -v "$1" >/dev/null 2>&1; }
+
+
+# select one if 'auto' mode enabled
+if [[ "$TOOL" == "auto" ]]; then
+  if have rasm2; then
+    TOOL="rasm2"
+  elif have ndisasm && ([[ "$ARCH" == "x86" || "$ARCH" == "x86_64" ]]); then
+    TOOL="ndisasm"
+  elif have objdump; then
+    TOOL="objdump"
+  else
+    echo "[-] ERROR: Could not find rasm2, ndisasm or objdump in host. Install radare2/nasm/binutils."
+    exit 4
+  fi
+fi
+
+
+# info
+echo "[+] Tool: $TOOL"
+echo "[+] Arch: $ARCH  bits: $BITS"
+
+# echo $OUTBIN
+# echo $ARCH
+# echo $BITS
+# echo $TOOL
+# echo $HEXFILE
+# echo $HEXSTRING
+
+
+# map objdump/rasm2
+case "$ARCH" in
+  x86)    OBJ_M="i386"; RASM_ARCH="x86"; ;;
+  x86_64) OBJ_M="i386:x86-64"; RASM_ARCH="x86"; BITS=64 ;;
+  arm)    OBJ_M="arm"; RASM_ARCH="arm"; ;;
+  aarch64|arm64) OBJ_M="aarch64"; RASM_ARCH="arm64"; BITS=64 ;;
+  mips)   OBJ_M="mips"; RASM_ARCH="mips"; ;;
+  *) echo "[-] ERROR: architecture not supported: $ARCH"; exit 5 ;;
+esac
+
+# ==================== TOOLS ====================
+
+# PROCESS FOR rasm2
+if [[ "$TOOL" == "rasm2" ]]; then
+  # rasm2 accept hex with spaces; insert spaces every 2 hex chars
+  HEX_SPACED=$(echo "$HEX_CLEAN" | sed -E 's/(..)/\1 /g' | sed -E 's/ $//')
+  echo "[+] rasm2 -a $RASM_ARCH -b $BITS -d"
+  rasm2 -a "$RASM_ARCH" -b "$BITS" -d "$HEX_SPACED" || {
+    echo "[-] rasm2 failed. Run the command another time but with -t objdump o -t ndisasm."
+    exit 6
+  }
+  exit 0
+fi
+
+# PROCESS FOR ndisasm 
+if [[ "$TOOL" == "ndisasm" ]]; then
+  if ! have ndisasm; then
+    echo "[-] ERROR: ndisasm not installed"
+    exit 7
+  fi
+  echo "[+] ndisasm -b $BITS $OUTBIN"
+  ndisasm -b "$BITS" "$OUTBIN"
+  exit 0
+fi
+
+# PROCESS ORF objdump
+if [[ "$TOOL" == "objdump" ]]; then
+  if ! have objdump; then
+    echo "[-] ERROR: objdump not installed"
+    exit 8
+  fi
+  OPTS="-D -b binary -m $OBJ_M"
+  if [[ "$ARCH" == "x86" || "$ARCH" == "x86_64" ]]; then
+    echo "[+] objdump $OPTS -M intel $OUTBIN"
+    objdump $OPTS -M intel "$OUTBIN"
+  else
+    echo "[+] objdump $OPTS $OUTBIN"
+    objdump $OPTS "$OUTBIN"
+  fi
+  exit 0
+fi
+
+echo "[-] ERROR: unknown tool: $TOOL"
+exit 9
+
